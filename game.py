@@ -132,7 +132,8 @@ levels_config = [
             {"x": 100, "y": 650, "w": 100, "h": 20, "image": "platform.png"},
             {"x": 250, "y": 550, "w": 100, "h": 20, "image": "platform.png"},
             {"x": 400, "y": 450, "w": 100, "h": 20, "image": "platform.png"},
-            {"x": 550, "y": 350, "w": 100, "h": 20, "image": "platform.png"}
+            {"x": 550, "y": 350, "w": 100, "h": 20, "image": "platform.png"},
+            {"x": 700, "y": 200, "w": 100, "h": 20, "image": "platform.png"}
         ],
         "obstacles": [
             {"x": 130, "y": 630, "w": 30, "h": 30, "speed": 4, "vertical": False, "image": "spike.png"},
