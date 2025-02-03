@@ -26,7 +26,7 @@ YELLOW = (255, 255, 0)  # For bullets
 
 # Set up the display
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("I Wanna Be The Guy Tribute with Pickups & Camera")
+pygame.display.set_caption("I Don't Wanna Be The Guy")
 clock = pygame.time.Clock()
 
 # Difficulty multipliers (scale obstacle speeds)
