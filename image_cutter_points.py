@@ -15,7 +15,7 @@ screen = pygame.display.set_mode((800, 600))
 # --------------------
 # Configuration
 # --------------------
-SOURCE_IMAGE_PATH = "images/environment/spells/fireball_0.png"         # Change this to your PNG file path
+SOURCE_IMAGE_PATH = "images/environment/background/environment-tiles.png"         # Change this to your PNG file path
 OUTPUT_IMAGE_PATH = "cropped_polygon.png"  # Output file name
 
 # --------------------

@@ -134,6 +134,18 @@ player_frames = all_sprite_frames[1]
 # --------------------
 # Animated Player Class (Now with Mana)
 # --------------------
+def check_trap_collision(player, tiled_platform):
+    # Get player's local coordinates relative to the tiled platform.
+    local_x = player.rect.centerx - tiled_platform.rect.left
+    local_y = player.rect.bottom - tiled_platform.rect.top
+    col = int(local_x // tiled_platform.tile_width)
+    row = int(local_y // tiled_platform.tile_height)
+    # Ensure the indices are within bounds.
+    if 0 <= row < len(tiled_platform.tile_map) and 0 <= col < len(tiled_platform.tile_map[0]):
+        # Return True if the tile is marked as a trap (value 1).
+        return tiled_platform.tile_map[row][col] == 1
+    return False
+
 class Player(pygame.sprite.Sprite):
     def __init__(self, x, y, frames=None, frame_duration=100):
         super().__init__()
@@ -171,9 +183,20 @@ class Player(pygame.sprite.Sprite):
         self.on_ground = False
         for plat in platforms:
             if self.rect.colliderect(plat.rect) and self.vel_y >= 0:
+                # If the platform is a tiled base, check if the player's foot is on a trap tile.
+                if isinstance(plat, TiledBasePlatform):
+                    if check_trap_collision(self, plat):
+                        # If stepping on a trap, the platform does NOT support the player.
+                        # Option 1: Immediately set health to 0 to trigger a respawn.
+                        self.health = 0
+                        print("Stepped on a trap tile!")
+                        continue  # Do not perform collision correction.
+                    # Otherwise, if it’s not a trap tile, treat it as normal.
+                # For normal or moving platforms (or safe tiles on a tiled platform):
                 self.rect.bottom = plat.rect.top
                 self.vel_y = 0
                 self.on_ground = True
+
 
         if self.rect.left < 0:
             self.rect.left = 0
@@ -187,7 +210,7 @@ class Player(pygame.sprite.Sprite):
         if self.damage_cooldown > 0:
             self.damage_cooldown -= 1
 
-        # Animation update
+        # Update animation
         if hasattr(self, 'frames'):
             now = pygame.time.get_ticks()
             if now - self.last_update > self.frame_duration:
@@ -197,6 +220,7 @@ class Player(pygame.sprite.Sprite):
                 if self.facing == -1:
                     self.image = pygame.transform.flip(self.image, True, False)
 
+
     def jump(self):
         if self.on_ground:
             self.vel_y = self.jump_strength
@@ -205,7 +229,7 @@ class Player(pygame.sprite.Sprite):
 # Platform Classes
 # --------------------
 class Platform(pygame.sprite.Sprite):
-    def __init__(self, x, y, w, h, color=GREEN, image_path=None):
+    def __init__(self, x, y, w, h, color=RED, image_path=None):
         super().__init__()
         if image_path:
             loaded_image = load_image(image_path, w, h)
@@ -238,6 +262,49 @@ class MovingPlatform(Platform):
         if self.rect.top <= self.boundaries[2] or self.rect.bottom >= self.boundaries[3]:
             self.direction.y *= -1
             print(f"[DEBUG] MovingPlatform at {self.rect.topleft} reversed vertical direction; new direction: {self.direction}")
+
+# New TiledBasePlatform Class – constructs a platform from image blocks.
+class TiledBasePlatform(pygame.sprite.Sprite):
+    def __init__(self, x, y, tile_map, tile_width, tile_height, tile_images=None):
+        """
+        tile_map: 2D list of integers (for example, 0 for solid, 1 for trap)
+        tile_width, tile_height: Dimensions of each tile in pixels.
+        tile_images: Optional dictionary mapping tile types to image file paths.
+                     Defaults: 0 -> solid tile image, 1 -> trap tile image.
+        """
+        super().__init__()
+        self.tile_map = tile_map
+        self.tile_width = tile_width
+        self.tile_height = tile_height
+        rows = len(tile_map)
+        cols = len(tile_map[0]) if rows > 0 else 0
+        width = cols * tile_width
+        height = rows * tile_height
+        # Create composite surface with per-pixel alpha.
+        self.image = pygame.Surface((width, height), pygame.SRCALPHA)
+        self.rect = self.image.get_rect(topleft=(x, y))
+        # Default tile images if none provided.
+        if tile_images is None:
+            tile_images = {
+                0: "images/base_platform_tile.png",   # solid tile
+                1: "images/base_platform_trap.png"      # trap tile
+            }
+        self.tile_images = {}
+        for tile_type, path in tile_images.items():
+            img = load_image(path, tile_width, tile_height)
+            if img is None:
+                fallback = pygame.Surface((tile_width, tile_height))
+                fallback.fill(GREEN if tile_type == 0 else RED)
+                self.tile_images[tile_type] = fallback
+            else:
+                self.tile_images[tile_type] = img
+        # Blit each tile according to the tile_map.
+        for row in range(rows):
+            for col in range(cols):
+                tile_type = tile_map[row][col]
+                tile_img = self.tile_images.get(tile_type)
+                if tile_img:
+                    self.image.blit(tile_img, (col * tile_width, row * tile_height))
 
 # --------------------
 # Obstacle Class (with Dynamic Behavior)
@@ -298,7 +365,6 @@ class Pickup(pygame.sprite.Sprite):
                 self.image = loaded_image
             else:
                 self.image = pygame.Surface((w, h))
-                # Use GREEN for health and YELLOW for mana by default
                 self.image.fill(GREEN if ptype=="health" else YELLOW)
         else:
             self.image = pygame.Surface((w, h))
@@ -309,15 +375,14 @@ class Pickup(pygame.sprite.Sprite):
 # Bullet Class (Spell Projectile)
 # --------------------
 class Bullet(pygame.sprite.Sprite):
-    def __init__(self, x, y, direction, image_path="images/bullet.png", width=50, height=50):
+    def __init__(self, x, y, direction, image_path="images/environment/spells/fire_ball_spell.png", width=50, height=50):
         super().__init__()
-        # Try to load the bullet image; if it fails, use a fallback yellow rectangle.
         self.image = load_image(image_path, width, height)
         if self.image is None:
             self.image = pygame.Surface((width, height))
             self.image.fill(YELLOW)
         self.rect = self.image.get_rect(center=(x, y))
-        self.speed = 10 * direction  # direction: 1 for right, -1 for left
+        self.speed = 10 * direction  # 1 for right, -1 for left
 
     def update(self):
         self.rect.x += self.speed
@@ -343,17 +408,29 @@ class Level:
             self.background_image = None
 
         for plat_conf in self.config.get("platforms", []):
+            # Use "moving": True for moving platforms,
+            # "tiled": True for tiled base platforms,
+            # otherwise create a normal platform.
             if plat_conf.get("moving", False):
                 platform = MovingPlatform(
                     plat_conf["x"],
                     plat_conf["y"],
                     plat_conf["w"],
                     plat_conf["h"],
-                    plat_conf.get("color", GREEN),
+                    plat_conf.get("color", RED),
                     plat_conf.get("image", None),
                     plat_conf.get("speed", 2),
                     plat_conf.get("direction", (1, 0)),
                     plat_conf.get("boundaries", (plat_conf["x"], plat_conf["x"] + 300, plat_conf["y"], plat_conf["y"]))
+                )
+            elif plat_conf.get("tiled", False):
+                platform = TiledBasePlatform(
+                    plat_conf["x"],
+                    plat_conf["y"],
+                    plat_conf["tiles"],              # A 2D list of tile types
+                    plat_conf["tile_width"],
+                    plat_conf["tile_height"],
+                    plat_conf.get("tile_images", None)
                 )
             else:
                 platform = Platform(
@@ -361,7 +438,7 @@ class Level:
                     plat_conf["y"],
                     plat_conf["w"],
                     plat_conf["h"],
-                    plat_conf.get("color", GREEN),
+                    plat_conf.get("color", RED),
                     plat_conf.get("image", None)
                 )
             self.platforms.add(platform)
@@ -369,15 +446,26 @@ class Level:
         for obs_conf in self.config.get("obstacles", []):
             speed = obs_conf.get("speed", 2) * self.difficulty_multiplier
             image_path = obs_conf.get("image", None)
-            obstacle = Obstacle(
-                obs_conf["x"],
-                obs_conf["y"],
-                obs_conf["w"],
-                obs_conf["h"],
-                speed,
-                image_path,
-                obs_conf.get("dynamic", False)
-            )
+            if obs_conf.get("boss", False):
+                obstacle = SmallBoss(
+                    obs_conf["x"],
+                    obs_conf["y"],
+                    obs_conf["w"],
+                    obs_conf["h"],
+                    speed,
+                    image_path,
+                    obs_conf.get("dynamic", False)
+                )
+            else:
+                obstacle = Obstacle(
+                    obs_conf["x"],
+                    obs_conf["y"],
+                    obs_conf["w"],
+                    obs_conf["h"],
+                    speed,
+                    image_path,
+                    obs_conf.get("dynamic", False)
+                )
             if obs_conf.get("vertical", False):
                 obstacle.vertical = True
             self.obstacles.add(obstacle)
@@ -444,6 +532,72 @@ class Level:
         for platform in self.platforms:
             if hasattr(platform, 'update'):
                 platform.update()
+# New Boss Class – inherits from Obstacle and flips its image based on movement direction.
+class SmallBoss(Obstacle):
+    def __init__(self, x, y, w, h, speed, image_path=None, dynamic=False):
+        # Call the parent constructor.
+        super().__init__(x, y, w, h, speed, image_path, dynamic)
+        # Save a copy of the original image for flipping purposes.
+        self.original_image = self.image.copy()
+        
+    def update(self):
+        # First, update the position as usual.
+        super().update()
+        # If the boss is moving horizontally, flip the image according to the speed.
+        # (We assume that if self.speed is negative, the boss is moving left.)
+        if not self.vertical:
+            if self.speed < 0:
+                # Flip the original image horizontally.
+                self.image = pygame.transform.flip(self.original_image, True, False)
+            else:
+                # Use the original image when moving right.
+                self.image = self.original_image.copy()
+
+
+# --------------------
+# New TiledBasePlatform Class
+# --------------------
+class TiledBasePlatform(pygame.sprite.Sprite):
+    def __init__(self, x, y, tile_map, tile_width, tile_height, tile_images=None):
+        """
+        tile_map: A 2D list of integers (e.g. [[0,0,1],[0,1,0],...])
+                  where 0 represents a solid tile and 1 represents a trap tile.
+        tile_width, tile_height: Dimensions for each tile (in pixels).
+        tile_images: Optional dictionary mapping tile types to image file paths.
+                     Default: 0 -> "images/base_platform_tile.png", 1 -> "images/base_platform_trap.png"
+        """
+        super().__init__()
+        self.tile_map = tile_map
+        self.tile_width = tile_width
+        self.tile_height = tile_height
+        rows = len(tile_map)
+        cols = len(tile_map[0]) if rows > 0 else 0
+        width = cols * tile_width
+        height = rows * tile_height
+        self.image = pygame.Surface((width, height), pygame.SRCALPHA)
+        self.rect = self.image.get_rect(topleft=(x, y))
+        # Set default tile images if none provided.
+        if tile_images is None:
+            tile_images = {
+                0: "images/base_platform_tile.png",   # solid tile
+                1: "images/base_platform_trap.png"      # trap tile
+            }
+        self.tile_images = {}
+        for tile_type, path in tile_images.items():
+            img = load_image(path, tile_width, tile_height)
+            if img is None:
+                fallback = pygame.Surface((tile_width, tile_height))
+                fallback.fill(GREEN if tile_type == 0 else RED)
+                self.tile_images[tile_type] = fallback
+            else:
+                self.tile_images[tile_type] = img
+        # Build the composite platform surface
+        for r in range(rows):
+            for c in range(cols):
+                tile_type = tile_map[r][c]
+                tile_img = self.tile_images.get(tile_type)
+                if tile_img:
+                    self.image.blit(tile_img, (c * tile_width, r * tile_height))
 
 # --------------------
 # Utility Functions
@@ -472,106 +626,190 @@ def get_camera_offset(player):
 # Level Configurations
 # --------------------
 levels_config = [
-    # Level 1: Getting Guy'd (includes one moving platform)
+    # Level 1: Getting Guy'd (includes one moving platform and one tiled base platform)
     {
         "background_color": (20, 20, 20),
-        "background_image": "images/environment/background/background0.png",
+        "background_image": "images/environment/background/environment-background.png",
         "platforms": [
-            {"x": 0, "y": MAP_HEIGHT - 40, "w": MAP_WIDTH, "h": 40, "image": "images/platform.png"},
-            {"x": 50, "y": 600, "w": 200, "h": 20, "image": "images/platform.png"},
-            {"x": 300, "y": 500, "w": 150, "h": 20, "image": "images/platform.png", "moving": True, "speed": 2, "direction": (1, 0), "boundaries": [300, 600, 500, 500]}
+            # Tiled base platform (covering the bottom of the level)
+            {"tiled": True,
+                "x": 0,
+                "y": MAP_HEIGHT - 40,
+                "tile_width": 50,
+                "tile_height": 60,
+                "tiles": [
+                    [0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0]
+                ],
+                "tile_images": {
+                    0: "images/environment/background/ground_1.png",   # solid block image
+                    1: "images/environment/background/water.gif"         # trap block image (kills the player)
+                }
+            },
+            {"x": 50, "y": 600, "w": 200, "h": 20, "image": "images/environment/background/float_plat.png"},
+            # Moving platform
+            {"x": 300, "y": 500, "w": 150, "h": 20, "image": "images/environment/background/float_plat.png",
+             "moving": True, "speed": 2, "direction": (1, 0), "boundaries": [300, 600, 500, 500]}
         ],
         "obstacles": [
-            {"x": 120, "y": 580, "w": 30, "h": 30, "speed": 3, "vertical": False, "image": "images/spike.png", "dynamic": True}
+            # Small boss obstacle (uses the "boss": True key)
+            {"boss": True, "x": 120, "y": 580, "w": 60, "h": 60,
+             "speed": 3, "image": "images/environment/small_boss/small_boss_1.png", "dynamic": True}
         ],
         "pickups": [
-            {"type": "health", "x": 500, "y": 550, "w": 50, "h": 50, "value": 20, "image": "images/environment/spells/Heart.png"},
-            {"type": "bullet", "x": 700, "y": 550, "w": 50, "h": 50, "value": 1, "image": "images/environment/spells/mana_poition.png"}
+            {"type": "health", "x": 500, "y": 550, "w": 50, "h": 50,
+             "value": 20, "image": "images/environment/spells/Heart.png"},
+            {"type": "bullet", "x": 700, "y": 550, "w": 50, "h": 50,
+             "value": 1, "image": "images/environment/spells/mana_poition.png"}
         ],
-        "goal": {"x": 1000, "y": MAP_HEIGHT - 90, "w": 50, "h": 50, "color": GOLD, "image": "images/environment/open_gate.png"},
+        "goal": {"x": 1000, "y": MAP_HEIGHT - 90, "w": 50, "h": 50,
+                 "color": GOLD, "image": "images/environment/open_gate.png"},
         "challenge_message": "Level 1: Getting Guy'd"
     },
     # Level 2: Sudden Death!
     {
         "background_color": (0, 0, 0),
-        "background_image": "images/environment/background/rock.png",
+        "background_image": "images/environment/background/environment-background.png",
         "platforms": [
-            {"x": 0, "y": MAP_HEIGHT - 40, "w": MAP_WIDTH, "h": 40, "image": "images/platform.png"},
-            {"x": 100, "y": 650, "w": 100, "h": 20, "image": "images/platform.png"},
-            {"x": 250, "y": 550, "w": 100, "h": 20, "image": "images/platform.png"},
-            {"x": 400, "y": 450, "w": 100, "h": 20, "image": "images/platform.png"},
-            {"x": 550, "y": 350, "w": 100, "h": 20, "image": "images/platform.png"},
-            {"x": 700, "y": 200, "w": 100, "h": 20, "image": "images/platform.png"}
+            {"tiled": True,
+                "x": 0,
+                "y": MAP_HEIGHT - 40,
+                "tile_width": 50,
+                "tile_height": 60,
+                "tiles": [
+                    [0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0]
+                ],
+                "tile_images": {
+                    0: "images/environment/background/ground_1.png",   # solid block image
+                    1: "images/environment/background/water.gif"         # trap block image (kills the player)
+                }
+            },
+            {"x": 100, "y": 650, "w": 100, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 250, "y": 550, "w": 100, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 400, "y": 450, "w": 100, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 550, "y": 350, "w": 100, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 700, "y": 200, "w": 100, "h": 20, "image": "images/environment/background/float_plat.png"}
         ],
         "obstacles": [
-            {"x": 130, "y": 630, "w": 30, "h": 30, "speed": 4, "vertical": False, "image": "images/spike.png"},
-            {"x": 280, "y": 530, "w": 30, "h": 30, "speed": 4, "vertical": False, "image": "images/spike.png"},
-            {"x": 430, "y": 430, "w": 30, "h": 30, "speed": 4, "vertical": False, "image": "images/spike.png"},
-            {"x": 580, "y": 330, "w": 30, "h": 30, "speed": 4, "vertical": False, "image": "images/spike.png"},
-            {"x": 300, "y": 300, "w": 30, "h": 30, "speed": 3, "vertical": True, "image": "images/spike.png"}
+            # Small boss appears first in this level as well:
+            {"boss": True, "x": 120, "y": 580, "w": 60, "h": 60,
+             "speed": 3, "image": "images/environment/small_boss/small_boss_1.png", "dynamic": True},
+            # Other obstacles (using the same image without boss behavior)
+            {"x": 280, "y": 530, "w": 30, "h": 30, "speed": 4,
+             "vertical": False, "image": "images/environment/small_boss/small_boss_1.png"},
+            {"x": 430, "y": 430, "w": 30, "h": 30, "speed": 4,
+             "vertical": False, "image": "images/environment/small_boss/small_boss_1.png"},
+            {"x": 580, "y": 330, "w": 30, "h": 30, "speed": 4,
+             "vertical": False, "image": "images/environment/small_boss/small_boss_1.png"},
+            {"x": 300, "y": 300, "w": 30, "h": 30, "speed": 3,
+             "vertical": True, "image": "images/environment/small_boss/small_boss_1.png"}
         ],
         "pickups": [
-            {"type": "health", "x": 500, "y": 500, "w": 50, "h": 50, "value": 20, "image": "images/environment/spells/Heart.png"}
+            {"type": "health", "x": 500, "y": 500, "w": 50, "h": 50,
+             "value": 20, "image": "images/environment/spells/Heart.png"}
         ],
-        "goal": {"x": 1000, "y": 250, "w": 50, "h": 50, "color": GOLD, "image": "images/environment/open_gate.png"},
+        "goal": {"x": 1000, "y": 250, "w": 50, "h": 50,
+                 "color": GOLD, "image": "images/environment/open_gate.png"},
         "challenge_message": "Level 2: Sudden Death!"
     },
     # Level 3: The Gauntlet
     {
         "background_color": (30, 0, 50),
-        "background_image": "images/environment/background/background3-720.png",
+        "background_image": "images/environment/background/environment-background.png",
         "platforms": [
-            {"x": 0, "y": MAP_HEIGHT - 40, "w": MAP_WIDTH, "h": 40, "image": "images/platform.png"},
-            {"x": 50, "y": 650, "w": 120, "h": 20, "image": "images/platform.png"},
-            {"x": 220, "y": 600, "w": 150, "h": 20, "image": "images/platform.png"},
-            {"x": 400, "y": 500, "w": 120, "h": 20, "image": "images/platform.png"},
-            {"x": 580, "y": 400, "w": 150, "h": 20, "image": "images/platform.png"},
-            {"x": 300, "y": 350, "w": 120, "h": 20, "image": "images/platform.png"}
+            {"tiled": True,
+                "x": 0,
+                "y": MAP_HEIGHT - 40,
+                "tile_width": 50,
+                "tile_height": 60,
+                "tiles": [
+                    [0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0]
+                ],
+                "tile_images": {
+                    0: "images/environment/background/ground_1.png",   # solid block image
+                    1: "images/environment/background/water.gif"         # trap block image (kills the player)
+                }
+            },
+            {"x": 50, "y": 650, "w": 120, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 220, "y": 600, "w": 150, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 400, "y": 500, "w": 120, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 580, "y": 400, "w": 150, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 300, "y": 350, "w": 120, "h": 20, "image": "images/environment/background/float_plat.png"}
         ],
         "obstacles": [
-            {"x": 70, "y": 630, "w": 30, "h": 30, "speed": 5, "vertical": False, "image": "images/spike.png", "dynamic": True},
-            {"x": 250, "y": 580, "w": 30, "h": 30, "speed": 5, "vertical": False, "image": "images/spike.png", "dynamic": True},
-            {"x": 420, "y": 530, "w": 30, "h": 30, "speed": 5, "vertical": False, "image": "images/spike.png", "dynamic": True},
-            {"x": 600, "y": 480, "w": 30, "h": 30, "speed": 5, "vertical": False, "image": "images/spike.png", "dynamic": True},
-            {"x": 320, "y": 330, "w": 30, "h": 30, "speed": 5, "vertical": False, "image": "images/spike.png", "dynamic": True},
-            {"x": 400, "y": 200, "w": 30, "h": 30, "speed": 4, "vertical": True, "image": "images/spike.png", "dynamic": True}
+            {"boss": True,"x": 70, "y": 630, "w": 40, "h": 40, "speed": 5,
+             "vertical": False, "image": "images\environment\small_boss\small_boss_2.png", "dynamic": True},
+            {"boss": True,"x": 250, "y": 580, "w": 40, "h": 40, "speed": 5,
+             "vertical": False, "image": "images\environment\small_boss\small_boss_2.png", "dynamic": True},
+            {"boss": True,"x": 420, "y": 530, "w": 40, "h": 40, "speed": 5,
+             "vertical": False, "image": "images\environment\small_boss\small_boss_2.png", "dynamic": True},
+            {"boss": True,"x": 600, "y": 480, "w": 40, "h": 40, "speed": 5,
+             "vertical": False, "image": "images\environment\small_boss\small_boss_2.png", "dynamic": True},
+            {"boss": True,"x": 320, "y": 330, "w": 40, "h": 40, "speed": 5,
+             "vertical": False, "image": "images\environment\small_boss\small_boss_2.png", "dynamic": True},
+            {"boss": True,"x": 400, "y": 200, "w": 40, "h": 40, "speed": 4,
+             "vertical": True, "image": "images\environment\small_boss\small_boss_2.png", "dynamic": True}
         ],
         "pickups": [
-            {"type": "bullet", "x": 700, "y": 300, "w": 50, "h": 50, "value": 1, "image": "images/environment/spells/mana_poition.png"}
+            {"type": "bullet", "x": 700, "y": 300, "w": 50, "h": 50,
+             "value": 1, "image": "images/environment/spells/mana_poition.png"}
         ],
-        "goal": {"x": 1100, "y": MAP_HEIGHT - 90, "w": 50, "h": 50, "color": GOLD, "image": "images/environment/open_gate.png"},
+        "goal": {"x": 1100, "y": MAP_HEIGHT - 90, "w": 50, "h": 50,
+                 "color": GOLD, "image": "images/environment/open_gate.png"},
         "challenge_message": "Level 3: The Gauntlet"
     },
     # Level 4: Final Challenge
     {
         "background_color": (0, 0, 0),
-        "background_image": "images/environment/background/rock.png",
+        "background_image": "images/environment/background/environment-background.png",
         "platforms": [
-            {"x": 0, "y": MAP_HEIGHT - 40, "w": MAP_WIDTH, "h": 40, "image": "images/platform.png"},
-            {"x": 50, "y": 700, "w": 100, "h": 20, "image": "images/platform.png"},
-            {"x": 200, "y": 650, "w": 80, "h": 20, "image": "images/platform.png"},
-            {"x": 320, "y": 600, "w": 60, "h": 20, "image": "images/platform.png"},
-            {"x": 420, "y": 550, "w": 80, "h": 20, "image": "images/platform.png"},
-            {"x": 540, "y": 500, "w": 100, "h": 20, "image": "images/platform.png"},
-            {"x": 680, "y": 450, "w": 80, "h": 20, "image": "images/platform.png"}
+            {"tiled": True,
+                "x": 0,
+                "y": MAP_HEIGHT - 40,
+                "tile_width": 50,
+                "tile_height": 60,
+                "tiles": [
+                    [0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0]
+                ],
+                "tile_images": {
+                    0: "images/environment/background/ground_1.png",   # solid block image
+                    1: "images/environment/background/water.gif"         # trap block image (kills the player)
+                }
+            },
+            {"x": 50, "y": 700, "w": 100, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 200, "y": 650, "w": 80, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 320, "y": 600, "w": 60, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 420, "y": 550, "w": 80, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 540, "y": 500, "w": 100, "h": 20, "image": "images/environment/background/float_plat.png"},
+            {"x": 680, "y": 450, "w": 80, "h": 20, "image": "images/environment/background/float_plat.png"}
         ],
         "obstacles": [
-            {"x": 70, "y": 680, "w": 30, "h": 30, "speed": 6, "vertical": False, "image": "images/spike.png"},
-            {"x": 220, "y": 630, "w": 30, "h": 30, "speed": 6, "vertical": False, "image": "images/spike.png"},
-            {"x": 340, "y": 580, "w": 30, "h": 30, "speed": 6, "vertical": False, "image": "images/spike.png"},
-            {"x": 440, "y": 530, "w": 30, "h": 30, "speed": 6, "vertical": False, "image": "images/spike.png"},
-            {"x": 560, "y": 480, "w": 30, "h": 30, "speed": 6, "vertical": False, "image": "images/spike.png"},
-            {"x": 700, "y": 430, "w": 30, "h": 30, "speed": 6, "vertical": False, "image": "images/spike.png"},
-            {"x": 400, "y": 400, "w": 30, "h": 30, "speed": 6, "vertical": True, "image": "images/spike.png"}
+            {"boss": True,"x": 70, "y": 680, "w": 40, "h": 40, "speed": 6,
+             "vertical": False, "image": "images/environment/small_boss/small_boss_2.png"},
+            {"boss": True,"x": 220, "y": 630, "w": 40, "h": 40, "speed": 6,
+             "vertical": False, "image": "images/spike.png"},
+            {"boss": True,"x": 340, "y": 580, "w": 40, "h": 40, "speed": 6,
+             "vertical": False, "image": "images/environment/small_boss/small_boss_2.png"},
+            {"boss": True,"x": 440, "y": 530, "w": 40, "h": 40, "speed": 6,
+             "vertical": False, "image": "images/spike.png"},
+            {"boss": True,"x": 560, "y": 480, "w": 40, "h": 40, "speed": 6,
+             "vertical": False, "image": "images/environment/small_boss/small_boss_2.png"},
+            {"boss": True,"x": 700, "y": 430, "w": 40, "h": 40, "speed": 6,
+             "vertical": False, "image": "images/spike.png"},
+            {"boss": True,"x": 400, "y": 400, "w": 40, "h": 40, "speed": 6,
+             "vertical": True, "image": "images/environment/small_boss/small_boss_2.png"}
         ],
         "pickups": [
-            {"type": "health", "x": 600, "y": 380, "w": 50, "h": 50, "value": 20, "image": "images/environment/spells/Heart.png"},
-            {"type": "bullet", "x": 800, "y": 380, "w": 50, "h": 50, "value": 1, "image": "images/environment/spells/mana_poition.png"}
+            {"type": "health", "x": 600, "y": 380, "w": 50, "h": 50,
+             "value": 20, "image": "images/environment/spells/Heart.png"},
+            {"type": "bullet", "x": 800, "y": 380, "w": 50, "h": 50,
+             "value": 1, "image": "images/environment/spells/mana_poition.png"}
         ],
-        "goal": {"x": 1100, "y": 100, "w": 50, "h": 50, "color": GOLD, "image": "images/environment/open_gate.png"},
+        "goal": {"x": 1100, "y": 100, "w": 50, "h": 50,
+                 "color": GOLD, "image": "images/environment/open_gate.png"},
         "challenge_message": "Final Challenge: Prove You're The Guy!"
     }
 ]
+
 
 # --------------------
 # Main Menu and Game Loop
@@ -616,11 +854,11 @@ def game_loop():
     # Define mana cost per spell
     MANA_COST = 10
 
-    # Set your desired dimensions (width, height)
-    desired_width = 64   # For example, double the original size
+    # Set desired dimensions for the player
+    desired_width = 64
     desired_height = 64
 
-    # Scale each frame in the list for the player's animation:
+    # Scale player animation frames
     scaled_player_frames = [pygame.transform.scale(frame, (desired_width, desired_height))
                             for frame in player_frames]
     # Create the player using the animated frames.
@@ -642,7 +880,8 @@ def game_loop():
                         player.jump()
                     if event.key == pygame.K_f:
                         if player.mana >= MANA_COST:
-                            bullet = Bullet(player.rect.centerx, player.rect.centery, player.facing, image_path="images/environment/spells/fire_ball_spell.png")
+                            bullet = Bullet(player.rect.centerx, player.rect.centery, player.facing,
+                                            image_path="images/environment/spells/fire_ball_spell.png")
                             bullet_group.add(bullet)
                             player.mana -= MANA_COST
                         else:
@@ -667,9 +906,8 @@ def game_loop():
                 if pickup.ptype == "health":
                     player.health = min(100, player.health + pickup.value)
                     print("Picked up health!")
-                # Treat pickups of type "bullet" as mana refills.
                 elif pickup.ptype == "bullet":
-                    # For example, each pickup adds 10 mana.
+                    # Treat "bullet" pickups as mana refills.
                     player.mana = min(100, player.mana + pickup.value * 10)
                     print("Picked up mana!")
 
@@ -711,7 +949,6 @@ def game_loop():
             mana_bar_height = 20
             mana_percentage = player.mana / 100
             current_mana_width = int(mana_bar_width * mana_percentage)
-            # Dark blue background and bright blue fill
             pygame.draw.rect(screen, (0, 0, 100), (20, 50, mana_bar_width, mana_bar_height))
             pygame.draw.rect(screen, (0, 0, 255), (20, 50, current_mana_width, mana_bar_height))
             mana_text = pygame.font.SysFont(None, 36).render(f"Mana: {player.mana}", True, WHITE)
