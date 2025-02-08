@@ -974,7 +974,7 @@ def get_camera_offset(player):
 
 def game_loop():
     difficulty_multiplier = DIFFICULTY[selected_difficulty]
-    current_level_index = 4  # For testing, you can adjust the starting level here.
+    current_level_index = 0  # For testing, you can adjust the starting level here.
     total_levels = len(levels_config)
     MANA_COST = 10
     desired_width = 64
